@@ -50,6 +50,14 @@ func (c *Cursor) ReflectPosOffsetCol(colOffset uint) {
 	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row, c.col+colOffset)
 }
 
+func (c *Cursor) ReflectPosOffsetRow(rowOffset uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row+rowOffset, c.col)
+}
+
+func (c *Cursor) ReflectPosOffset(rowOffset, colOffset uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row+rowOffset, c.col+colOffset)
+}
+
 func (c *Cursor) GetPos() error {
 	fmt.Print(ansi.Esc + "[6n")
 

@@ -24,6 +24,10 @@ const (
 	EntireLine    ClearLineMethod = 2
 )
 
+func GetTermSize() (int, int, error) {
+	return term.GetSize(int(os.Stdin.Fd()))
+}
+
 type CliHistory struct {
 	trie  *ds.Trie
 	buf   string
@@ -41,6 +45,8 @@ type Tty struct {
 	sugg     *ds.Heap[*ds.TrieNode]
 	oldState *term.State
 	err      error
+	dimX     int
+	dimY     int
 }
 
 // Ioctl Realization: https://github.com/snabb/tcxpgrp
@@ -132,7 +138,7 @@ func (hist *CliHistory) LoadHist() {
 		hist.Append(scanner.Text())
 	}
 	if err = scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Scanner err: ", err.Error())
+		fmt.Fprintf(os.Stderr, "Scanner err: %s", err.Error())
 	}
 	hist.base = hist.size
 	hist.index = hist.base
@@ -150,7 +156,7 @@ func (hist *CliHistory) DumpHist() {
 	for i := hist.base; i < hist.size; i++ {
 		line, err := hist.trie.At(i)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
+			fmt.Fprintf(os.Stderr, "%s", err.Error())
 			return
 		}
 		n, err := writer.WriteString(line + "\n")
@@ -181,6 +187,7 @@ func NewTty() *Tty {
 		fmt.Println(tty.err)
 		os.Exit(1)
 	}
+	tty.dimX, tty.dimY, _ = GetTermSize()
 	return tty
 }
 
@@ -223,16 +230,27 @@ func (tty *Tty) Suggest() {
 
 func (tty *Tty) Read() string {
 	tty.Reset()
+	tty.dimX, tty.dimY, _ = GetTermSize()
 	input := tty.Inp
 	cursor := tty.Cur
 	exit := false
+	var rowOffset, colOffset uint
+	var rowBuffr uint
 	for {
-		cursor.ReflectPos()
-		tty.ClearLine(CursorToEnd)
-		fmt.Printf("%s", input.line)
+		lineSize := uint(tty.dimX) - cursor.col
+		rowBuffr = uint(input.Len()) / lineSize
+		for row := range rowBuffr + 1 {
+			cursor.ReflectPosOffsetRow(row)
+			tty.ClearLine(CursorToEnd)
+			start := row * lineSize
+			end := min(start+lineSize, uint(len(input.line)))
+			fmt.Printf("%s", input.line[start:end])
+		}
 		tty.Suggest()
 
-		cursor.ReflectPosOffsetCol(input.index)
+		rowOffset = input.index / lineSize
+		colOffset = input.index % lineSize
+		cursor.ReflectPosOffset(rowOffset, colOffset)
 		cursor.Block()
 
 		n, err := os.Stdin.Read(input.b[:])

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cl "dlsh/utils/cmdline"
@@ -10,8 +9,6 @@ import (
 )
 
 func main() {
-	fmt.Println("$HOME=" + os.Getenv("HOME"))
-
 	tty := cl.NewTty()
 	tty.GetPrompt()
 	for {
