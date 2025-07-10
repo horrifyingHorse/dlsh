@@ -47,6 +47,8 @@ type Tty struct {
 	err      error
 	dimX     int
 	dimY     int
+	sizeX    uint
+	sizeY    uint
 }
 
 // Ioctl Realization: https://github.com/snabb/tcxpgrp
@@ -188,6 +190,8 @@ func NewTty() *Tty {
 		os.Exit(1)
 	}
 	tty.dimX, tty.dimY, _ = GetTermSize()
+	tty.sizeX = uint(tty.dimX) - tty.Cur.initCol
+	tty.sizeY = 1
 	return tty
 }
 
@@ -223,9 +227,49 @@ func (tty *Tty) Suggest() {
 	if top, err = tty.sugg.Top(); err != nil {
 		return
 	}
-	fmt.Print(
-		ansi.Dim + top.GetString()[tty.Inp.Len():] + ansi.Reset,
-	)
+	fmt.Print(ansi.Dim)
+	tty.PrintStr(top.GetString()[tty.Inp.Len():])
+	fmt.Print(ansi.Reset)
+}
+
+func (tty *Tty) UpdateLayout() {
+	tty.sizeX = uint(tty.dimX) - tty.Cur.initCol
+}
+
+func (tty *Tty) Print() {
+	input := tty.Inp
+	cursor := tty.Cur
+	tty.sizeY = (uint(input.Len()) / tty.sizeX) + 1
+	for row := range tty.sizeY {
+		cursor.ReflectInitPosOffsetRow(row)
+		// tty.ClearLine(CursorToEnd)
+		start := row * tty.sizeX
+		end := min(start+tty.sizeX, uint(len(input.line)))
+		fmt.Printf("%s", input.line[start:end])
+	}
+}
+
+func (tty *Tty) PrintStr(bffr string) {
+	colOffset := uint(tty.Inp.Len()) % tty.sizeX
+	rowBuffrLen := (uint(len(bffr)) + colOffset) / tty.sizeX
+	offset := min(tty.sizeX-colOffset, uint(len(bffr)))
+	fmt.Printf("%s", bffr[:offset])
+	tty.sizeY += rowBuffrLen
+	for row := range rowBuffrLen {
+		tty.Cur.ReflectPosAt(tty.Cur.row+row+1, tty.Cur.initCol)
+		// tty.ClearLine(CursorToEnd)
+		start := offset + row*tty.sizeX
+		end := min(start+tty.sizeX, uint(len(bffr)))
+		fmt.Printf("%s", bffr[start:end])
+	}
+}
+
+func (tty *Tty) Clear() {
+	cursor := tty.Cur
+	for row := range tty.sizeY {
+		cursor.ReflectInitPosOffsetRow(row)
+		tty.ClearLine(CursorToEnd)
+	}
 }
 
 func (tty *Tty) Read() string {
@@ -234,23 +278,15 @@ func (tty *Tty) Read() string {
 	input := tty.Inp
 	cursor := tty.Cur
 	exit := false
-	var rowOffset, colOffset uint
-	var rowBuffr uint
 	for {
-		lineSize := uint(tty.dimX) - cursor.col
-		rowBuffr = uint(input.Len()) / lineSize
-		for row := range rowBuffr + 1 {
-			cursor.ReflectPosOffsetRow(row)
-			tty.ClearLine(CursorToEnd)
-			start := row * lineSize
-			end := min(start+lineSize, uint(len(input.line)))
-			fmt.Printf("%s", input.line[start:end])
-		}
+		tty.Clear()
+		tty.Print()
 		tty.Suggest()
+		tty.UpdateLayout()
 
-		rowOffset = input.index / lineSize
-		colOffset = input.index % lineSize
-		cursor.ReflectPosOffset(rowOffset, colOffset)
+		cursor.SetRowRelative(input.index / tty.sizeX)
+		cursor.SetColRelative(input.index % tty.sizeX)
+		cursor.ReflectPos()
 		cursor.Block()
 
 		n, err := os.Stdin.Read(input.b[:])
@@ -288,9 +324,10 @@ func (tty *Tty) Read() string {
 		tty.sugg = tty.hist.trie.Search(string(input.line))
 	}
 
-	cursor.ReflectPos()
-	tty.ClearLine(CursorToEnd)
-	fmt.Printf("%s\r\n", input.line)
+	// cursor.ReflectPos()
+	// tty.ClearLine(CursorToEnd)
+	// fmt.Printf("%s\r\n", input.line)
+	fmt.Print("\r\n")
 	tty.hist.Append(input.str)
 	tty.lineIdx++
 	return input.str

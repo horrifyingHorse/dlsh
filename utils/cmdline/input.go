@@ -9,7 +9,8 @@ import (
 )
 
 type Cursor struct {
-	row, col uint
+	row, col         uint
+	initRow, initCol uint
 }
 
 type Input struct {
@@ -38,12 +39,20 @@ func (inp *Input) Str() string {
 	return inp.str
 }
 
-func (c *Cursor) ReflectPos() {
-	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row, c.col)
+func (c *Cursor) SetRowRelative(rowOffset uint) {
+	c.row = c.initRow + rowOffset
 }
 
-func (c *Cursor) Block() {
-	fmt.Print(ansi.Invert, ansi.Reset)
+func (c *Cursor) SetColRelative(colOffset uint) {
+	c.col = c.initCol + colOffset
+}
+
+func (c *Cursor) ReflectPosAt(row, col uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, row, col)
+}
+
+func (c *Cursor) ReflectPos() {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row, c.col)
 }
 
 func (c *Cursor) ReflectPosOffsetCol(colOffset uint) {
@@ -56,6 +65,26 @@ func (c *Cursor) ReflectPosOffsetRow(rowOffset uint) {
 
 func (c *Cursor) ReflectPosOffset(rowOffset, colOffset uint) {
 	fmt.Printf("%s[%d;%dH", ansi.Esc, c.row+rowOffset, c.col+colOffset)
+}
+
+func (c *Cursor) Block() {
+	fmt.Print(ansi.Invert, ansi.Reset)
+}
+
+func (c *Cursor) ReflectInitPos() {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.initRow, c.initCol)
+}
+
+func (c *Cursor) ReflectInitPosOffsetCol(colOffset uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.initRow, c.initCol+colOffset)
+}
+
+func (c *Cursor) ReflectInitPosOffsetRow(rowOffset uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.initRow+rowOffset, c.initCol)
+}
+
+func (c *Cursor) ReflectInitPosOffset(rowOffset, colOffset uint) {
+	fmt.Printf("%s[%d;%dH", ansi.Esc, c.initRow+rowOffset, c.initCol+colOffset)
 }
 
 func (c *Cursor) GetPos() error {
@@ -73,7 +102,7 @@ func (c *Cursor) GetPos() error {
 		}
 	}
 
-	_, err = fmt.Sscanf(string(buf[:n]), ansi.Esc+"[%d;%dR", &c.row, &c.col)
+	_, err = fmt.Sscanf(string(buf[:n]), ansi.Esc+"[%d;%dR", &c.initRow, &c.initCol)
 	if err != nil {
 		return err
 	}
@@ -84,4 +113,5 @@ func (c *Cursor) Reset() {
 	if err := c.GetPos(); err != nil {
 		fmt.Println(err)
 	}
+	c.row, c.col = c.initRow, c.initCol
 }
