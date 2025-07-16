@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"dlsh/utils/ansi"
@@ -47,8 +48,11 @@ type Tty struct {
 	err      error
 	dimX     int
 	dimY     int
-	sizeX    uint
-	sizeY    uint
+	sizeX    int
+	sizeY    int
+
+	winchDone chan bool
+	sigwinch  atomic.Bool
 }
 
 // Ioctl Realization: https://github.com/snabb/tcxpgrp
@@ -190,9 +194,26 @@ func NewTty() *Tty {
 		os.Exit(1)
 	}
 	tty.dimX, tty.dimY, _ = GetTermSize()
-	tty.sizeX = uint(tty.dimX) - tty.Cur.initCol
+	tty.sizeX = tty.dimX - tty.Cur.initCol
 	tty.sizeY = 1
+	tty.winchDone = make(chan bool)
+
 	return tty
+}
+
+func (tty *Tty) winch() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGWINCH)
+	for {
+		select {
+		case <-tty.winchDone:
+			signal.Stop(sig)
+			close(sig)
+			return
+		case <-sig:
+			tty.sigwinch.Store(true)
+		}
+	}
 }
 
 func (tty *Tty) Raw() {
@@ -228,38 +249,48 @@ func (tty *Tty) Suggest() {
 		return
 	}
 	fmt.Print(ansi.Dim)
-	tty.PrintStr(top.GetString()[tty.Inp.Len():])
+	tty.Append(top.GetString()[tty.Inp.Len():])
 	fmt.Print(ansi.Reset)
 }
 
-func (tty *Tty) UpdateLayout() {
-	tty.sizeX = uint(tty.dimX) - tty.Cur.initCol
+func (tty *Tty) CalcLayout() (int, int) {
+	x, y := GetPos()
+	tty.dimX, tty.dimY, _ = GetTermSize()
+	deltaX := tty.Cur.row - x
+	tty.Cur.initRow -= deltaX
+	deltaY := tty.Cur.col - y
+	tty.Cur.initCol -= deltaY
+	tty.sizeX = tty.dimX - tty.Cur.initCol
+	return deltaX, deltaY
+}
+
+func (tty *Tty) CalcLayoutX() {
+	tty.sizeX = tty.dimX - tty.Cur.initCol
 }
 
 func (tty *Tty) Print() {
 	input := tty.Inp
 	cursor := tty.Cur
-	tty.sizeY = (uint(input.Len()) / tty.sizeX) + 1
+	tty.sizeY = (input.Len() / tty.sizeX) + 1
 	for row := range tty.sizeY {
 		cursor.ReflectInitPosOffsetRow(row)
-		// tty.ClearLine(CursorToEnd)
 		start := row * tty.sizeX
-		end := min(start+tty.sizeX, uint(len(input.line)))
-		fmt.Printf("%s", input.line[start:end])
+		end := min(start+tty.sizeX, len(input.bfr))
+		fmt.Printf("%s", input.bfr[start:end])
 	}
 }
 
-func (tty *Tty) PrintStr(bffr string) {
-	colOffset := uint(tty.Inp.Len()) % tty.sizeX
-	rowBuffrLen := (uint(len(bffr)) + colOffset) / tty.sizeX
-	offset := min(tty.sizeX-colOffset, uint(len(bffr)))
+func (tty *Tty) Append(bffr string) {
+	colOffset := tty.Inp.Len() % tty.sizeX
+	rowOffset := tty.Inp.Len()/tty.sizeX + tty.Cur.initRow
+	rowBuffrLen := (len(bffr) + colOffset) / tty.sizeX
+	offset := min(tty.sizeX-colOffset, len(bffr))
 	fmt.Printf("%s", bffr[:offset])
 	tty.sizeY += rowBuffrLen
 	for row := range rowBuffrLen {
-		tty.Cur.ReflectPosAt(tty.Cur.row+row+1, tty.Cur.initCol)
-		// tty.ClearLine(CursorToEnd)
+		tty.Cur.ReflectPosAt(rowOffset+row+1, tty.Cur.initCol)
 		start := offset + row*tty.sizeX
-		end := min(start+tty.sizeX, uint(len(bffr)))
+		end := min(start+tty.sizeX, len(bffr))
 		fmt.Printf("%s", bffr[start:end])
 	}
 }
@@ -272,22 +303,54 @@ func (tty *Tty) Clear() {
 	}
 }
 
-func (tty *Tty) Read() string {
-	tty.Reset()
+func (tty *Tty) Draw() {
+	fmt.Print(ansi.CursorHide)
+	tty.Clear()
 	tty.dimX, tty.dimY, _ = GetTermSize()
-	input := tty.Inp
-	cursor := tty.Cur
-	exit := false
-	for {
-		tty.Clear()
-		tty.Print()
-		tty.Suggest()
-		tty.UpdateLayout()
+	// cursor.ReflectInitPos()
+	tty.CalcLayoutX()
+	tty.Print()
+	tty.Suggest()
+	fmt.Print(ansi.CursorShow)
 
-		cursor.SetRowRelative(input.index / tty.sizeX)
-		cursor.SetColRelative(input.index % tty.sizeX)
-		cursor.ReflectPos()
-		cursor.Block()
+	tty.Cur.SetRowRelative(int(tty.Inp.index / uint(tty.sizeX)))
+	tty.Cur.SetColRelative(int(tty.Inp.index % uint(tty.sizeX)))
+	tty.Cur.ReflectPos()
+	tty.Cur.Block()
+}
+
+func (tty *Tty) DrawWinch() {
+	deltaX, _ := tty.CalcLayout()
+	fmt.Print(ansi.CursorHide)
+	lines2clear := tty.sizeY + deltaX
+	for lines2clear >= 0 {
+		tty.Cur.ReflectPosAt(tty.Cur.initRow+lines2clear, 0)
+		tty.ClearLine(EntireLine)
+		lines2clear--
+	}
+	tty.Cur.ReflectPosAt(tty.Cur.initRow, 0)
+	tty.ReflectPrompt()
+	tty.Print()
+	tty.Suggest()
+	fmt.Print(ansi.CursorShow)
+
+	tty.Cur.SetRowRelative(int(tty.Inp.index / uint(tty.sizeX)))
+	tty.Cur.SetColRelative(int(tty.Inp.index % uint(tty.sizeX)))
+	tty.Cur.ReflectPos()
+	tty.Cur.Block()
+	tty.sigwinch.Store(false)
+}
+
+func (tty *Tty) Read() string {
+	// [FIX:] this is repetitive
+	go tty.winch()
+
+	tty.Reset()
+	input := tty.Inp
+	exit := false
+
+	for {
+		tty.Draw()
 
 		n, err := os.Stdin.Read(input.b[:])
 		if err != nil {
@@ -304,11 +367,11 @@ func (tty *Tty) Read() string {
 			exit = true
 		case key.Backspace:
 			if input.Len() > 0 && input.index > 0 {
-				input.line = slices.Delete(input.line, int(input.index)-1, int(input.index))
+				input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
 				input.index--
 			}
 		default:
-			input.line = slices.Insert(input.line, int(input.index), input.b[0])
+			input.bfr = slices.Insert(input.bfr, int(input.index), input.b[0])
 			input.index++
 		}
 
@@ -321,15 +384,16 @@ func (tty *Tty) Read() string {
 			break
 		}
 
-		tty.sugg = tty.hist.trie.Search(string(input.line))
+		if tty.sigwinch.Load() {
+			tty.DrawWinch()
+		}
+		tty.sugg = tty.hist.trie.Search(string(input.bfr))
 	}
 
-	// cursor.ReflectPos()
-	// tty.ClearLine(CursorToEnd)
-	// fmt.Printf("%s\r\n", input.line)
 	fmt.Print("\r\n")
 	tty.hist.Append(input.str)
 	tty.lineIdx++
+	tty.winchDone <- true
 	return input.str
 }
 
@@ -360,7 +424,7 @@ func (tty *Tty) HandleArrowKeys() {
 			}
 			pline, _ = hist.PrevLine()
 		}
-		input.line = []byte(pline)
+		input.bfr = []byte(pline)
 		input.index = uint(input.Len())
 
 	case key.Down:
@@ -385,7 +449,7 @@ func (tty *Tty) HandleArrowKeys() {
 		} else {
 			nline, _ = hist.NextLine()
 		}
-		input.line = []byte(nline)
+		input.bfr = []byte(nline)
 		input.index = uint(input.Len())
 
 	case key.Left:
@@ -399,7 +463,7 @@ func (tty *Tty) HandleArrowKeys() {
 		if input.index == uint(input.Len()) &&
 			tty.sugg != nil && tty.sugg.Size() > 0 {
 			top, _ := tty.sugg.Top()
-			input.line = []byte(top.GetString())
+			input.bfr = []byte(top.GetString())
 			input.index = uint(input.Len())
 		} else if input.index < uint(input.Len()) {
 			input.index++

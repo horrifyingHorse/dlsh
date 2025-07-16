@@ -13,4 +13,6 @@ const (
 	ClLine      string = Esc + "[0J"
 	ClLineToEnd string = Esc + "[0K"
 	Restore     string = Esc + " 8"
+	CursorHide  string = Esc + "[?25l"
+	CursorShow  string = Esc + "[?25h"
 )
