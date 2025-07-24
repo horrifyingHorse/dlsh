@@ -476,18 +476,30 @@ func (tty *Tty) ClearLine(cl ClearLineMethod) {
 }
 
 func (tty *Tty) GetPrompt() {
-	home := os.Getenv("HOME")
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Println("Failed to get current dir")
 		os.Exit(1)
 	}
-	if strings.Index(cwd, home) == 0 {
-		cwd = strings.Replace(cwd, home, "~", 1)
+
+	// home := os.Getenv("HOME")
+	// if strings.Index(cwd, home) == 0 {
+	// 	cwd = strings.Replace(cwd, home, "~", 1)
+	// }
+	if strings.Index(cwd, "/") != -1 {
+		cwd = cwd[strings.LastIndex(cwd, "/")+1:]
 	}
-	tty.Prompt = cwd + "> "
+
+	tty.Prompt = cwd
 }
 
 func (tty *Tty) ReflectPrompt() {
-	fmt.Print(tty.Prompt)
+	ansi.SetBgRGB(40, 44, 52)
+	ansi.SetFgRGB(186, 187, 241)
+	fmt.Print(ansi.BoldOn)
+	fmt.Print(" " + tty.Prompt + " ")
+	fmt.Print(ansi.Reset)
+
+	ansi.SetFgRGB(186, 187, 241)
+	fmt.Print(ansi.BoldOn + " ~ " + ansi.Reset)
 }
