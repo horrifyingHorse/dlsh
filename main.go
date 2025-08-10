@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	// "fmt"
 	"strings"
 
 	cl "dlsh/utils/cmdline"
@@ -20,7 +20,7 @@ func main() {
 
 		line = strings.Trim(line, " \t")
 		tokens := cl.Tokenize(&line)
-		fmt.Println(tokens, len(tokens))
+		// fmt.Println(tokens, len(tokens))
 
 		dlsh := eu.NewExecUnit()
 		dlsh.Instructions = cl.Parse(tokens)
