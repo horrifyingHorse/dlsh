@@ -356,32 +356,36 @@ func (tty *Tty) Read() string {
 		if err != nil {
 			fmt.Println("DED\r\n")
 		}
+
+		// is it Escape Sequecne?
 		if n > 2 && input.b[0] == key.Escape && input.b[1] == key.OpenSqBracket {
-			tty.HandleArrowKeys()
-			continue
-		}
-
-		switch input.b[0] {
-		case key.Enter:
-			input.Str()
-			exit = true
-		case key.Backspace:
-			if input.Len() > 0 && input.index > 0 {
-				input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
-				input.index--
+			// fmt.Printf("\r\n%d\r\n", input.b[2])
+			// returns toContinue
+			tty.HandleEscapeSequence()
+		} else {
+			// fmt.Printf("\r\n%d\r\n", input.b[0])
+			switch input.b[0] {
+			case key.Enter:
+				input.Str()
+				exit = true
+			case key.Backspace:
+				if input.Len() > 0 && input.index > 0 {
+					input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
+					input.index--
+				}
+			default:
+				input.bfr = slices.Insert(input.bfr, int(input.index), input.b[0])
+				input.index++
 			}
-		default:
-			input.bfr = slices.Insert(input.bfr, int(input.index), input.b[0])
-			input.index++
-		}
 
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
 
-		if exit {
-			break
+			if exit {
+				break
+			}
 		}
 
 		if tty.sigwinch.Load() {
@@ -395,6 +399,24 @@ func (tty *Tty) Read() string {
 	tty.lineIdx++
 	tty.winchDone <- true
 	return input.str
+}
+
+func (tty *Tty) HandleEscapeSequence() {
+	input := tty.Inp
+	if input.b[2] >= key.Up && input.b[2] <= key.Left {
+		tty.HandleArrowKeys()
+	}
+	switch input.b[2] {
+	case key.Delete:
+		if input.Len() > 0 && input.index < uint(input.Len()) {
+			if input.index != uint(input.Len())-1 {
+				input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
+			} else {
+				input.bfr = input.bfr[:input.index]
+				input.index--
+			}
+		}
+	}
 }
 
 func (tty *Tty) HandleArrowKeys() {
