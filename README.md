@@ -1,8 +1,10 @@
 # *`dlsh`*
+
 dl shell - not everything is an abbreviation
 
 ## Todo
 
+- [ ] Local dir bin executions
 - [ ] Input features: support more editing opts
 - [ ] Inline highlighting (quick sol: regex; hard way: parsing)
 - [ ] Improve input layout
