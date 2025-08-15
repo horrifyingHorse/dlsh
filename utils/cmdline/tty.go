@@ -12,6 +12,7 @@ import (
 	"dlsh/utils/ansi"
 	ds "dlsh/utils/datastruct"
 	key "dlsh/utils/keys"
+
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -264,24 +265,31 @@ func (tty *Tty) Read() string {
 			break
 		}
 
-		n, err := os.Stdin.Read(input.b[:])
+		input.ClearReadBytes()
+		_, err := os.Stdin.Read(input.b[:])
 		if err != nil {
 			fmt.Println("DED\r\n")
 		}
 
+		input.DisplayReadBytes()
+
+		// https://en.wikipedia.org/wiki/ANSI_escape_code#Terminal_input_sequences
+		input.ParseReadBytes()
+
 		// is it Escape Sequecne?
-		if n > 2 && input.b[0] == key.Escape && input.b[1] == key.OpenSqBracket {
-			// fmt.Printf("\r\n%d\r\n", input.b[2])
+		if input.hasCSI {
+			// fmt.Printf("\r\nsize: %d | %d\r\n", len(input.b), input.b[6])
 			// returns toContinue
 			tty.HandleEscapeSequence()
+			tty.HushNextSuggestion()
 		} else {
 			// fmt.Printf("\r\n%d\r\n", input.b[0])
-			switch input.b[0] {
+			switch input.finalByte {
 			case key.Enter:
 				input.Str()
 				exit = true
 				tty.NilSuggestions()
-				tty.SuppressSuggestions()
+				tty.HushNextSuggestion()
 			case key.Backspace:
 				if input.Len() > 0 && input.index > 0 {
 					input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
@@ -315,18 +323,19 @@ func (tty *Tty) Read() string {
 
 func (tty *Tty) HandleEscapeSequence() {
 	input := tty.Inp
-	if input.b[2] >= key.Up && input.b[2] <= key.Left {
+	if input.finalByte >= key.Up && input.finalByte <= key.Left {
 		tty.HandleArrowKeys()
 	}
-	switch input.b[2] {
-	case key.Delete:
-		if input.Len() > 0 && input.index < input.Len() {
-			if input.index != input.Len()-1 {
-				input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
-			} else {
-				input.bfr = input.bfr[:input.index]
-				// Is this a good idea? I never liked Delete become backspace
-				// input.index = max(input.index-1, 0)
+	if input.finalByte == key.Tilde {
+		if input.keycode == int(key.Delete) {
+			if input.Len() > 0 && input.index < input.Len() {
+				if input.index != input.Len()-1 {
+					input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
+				} else {
+					input.bfr = input.bfr[:input.index]
+					// Is this a good idea? I never liked Delete become backspace
+					// input.index = max(input.index-1, 0)
+				}
 			}
 		}
 	}
@@ -440,9 +449,10 @@ func (tty *Tty) ReflectPrompt() {
 }
 
 func (tty *Tty) CalcSuggestions() {
-	if !tty.supSugg {
+	if tty.supSugg == false {
 		tty.sugg = tty.hist.trie.Search(string(tty.Inp.bfr))
 	}
+	tty.supSugg = false
 }
 
 func (tty *Tty) NilSuggestions() {
@@ -454,6 +464,6 @@ func (tty *Tty) ClearSuggestions() {
 	tty.supSugg = false
 }
 
-func (tty *Tty) SuppressSuggestions() {
+func (tty *Tty) HushNextSuggestion() {
 	tty.supSugg = true
 }
