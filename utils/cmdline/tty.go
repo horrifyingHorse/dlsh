@@ -1,7 +1,6 @@
 package cmdline
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
@@ -29,14 +28,6 @@ func GetTermSize() (int, int, error) {
 	return term.GetSize(int(os.Stdin.Fd()))
 }
 
-type CliHistory struct {
-	trie  *ds.Trie
-	buf   string
-	index uint
-	size  uint
-	base  uint
-}
-
 type Tty struct {
 	Prompt   string
 	Inp      *Input
@@ -44,6 +35,7 @@ type Tty struct {
 	hist     *CliHistory
 	lineIdx  uint
 	sugg     *ds.Heap[*ds.TrieNode]
+	supSugg  bool
 	oldState *term.State
 	err      error
 	dimX     int
@@ -91,91 +83,6 @@ func SigDfl() {
 	signal.Reset(syscall.SIGTTOU)
 }
 
-func NewCliHistory() *CliHistory {
-	ptr := new(CliHistory)
-	ptr.trie = ds.NewTrie()
-	return ptr
-}
-
-func (hist *CliHistory) Append(line string) {
-	hist.trie.Insert(line)
-	hist.size = uint(hist.trie.Size())
-	hist.index = hist.size
-}
-
-func (hist *CliHistory) PrevLine() (string, error) {
-	if hist.index > hist.size || hist.size == 0 {
-		return "", fmt.Errorf("Invalid index: %d", hist.index)
-	}
-	prevNode := hist.trie.NodeAt(hist.index)
-	if hist.index != 0 {
-		hist.index--
-		if prevNode == hist.trie.NodeAt(hist.index) {
-			return hist.PrevLine()
-		}
-	}
-	return hist.trie.At(hist.index)
-}
-
-func (hist *CliHistory) NextLine() (string, error) {
-	if hist.index > hist.size || hist.size == 0 {
-		return "", fmt.Errorf("Invalid index: %d", hist.index)
-	}
-	prevNode := hist.trie.NodeAt(hist.index)
-	if hist.index < hist.size {
-		hist.index++
-		if prevNode == hist.trie.NodeAt(hist.index) {
-			return hist.NextLine()
-		}
-	}
-	return hist.trie.At(hist.index)
-}
-
-func (hist *CliHistory) LoadHist() {
-	fp, err := os.OpenFile(os.Getenv("HOME")+"/.dlshrc", os.O_RDONLY|os.O_CREATE, 0644)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Unable to open ~/.dlshrc")
-		return
-	}
-	defer fp.Close()
-
-	scanner := bufio.NewScanner(fp)
-	for scanner.Scan() {
-		hist.Append(scanner.Text())
-	}
-	if err = scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Scanner err: %s", err.Error())
-	}
-	hist.base = hist.size
-	hist.index = hist.base
-}
-
-func (hist *CliHistory) DumpHist() {
-	fp, err := os.OpenFile(os.Getenv("HOME")+"/.dlshrc", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Unable to open ~/.dlshrc: ", err.Error())
-		return
-	}
-	defer fp.Close()
-
-	writer := bufio.NewWriter(fp)
-	for i := hist.base; i < hist.size; i++ {
-		line, err := hist.trie.At(i)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s", err.Error())
-			return
-		}
-		n, err := writer.WriteString(line + "\n")
-		if err != nil {
-			fmt.Fprintf(
-				os.Stderr, "Unable to write to ~/.dlshrc %d / %d : %s", n, len(line)+1, err.Error(),
-			)
-			return
-		}
-	}
-	writer.Flush()
-}
-
 func (tty *Tty) DumpHist() {
 	tty.hist.DumpHist()
 }
@@ -188,6 +95,7 @@ func NewTty() *Tty {
 	tty.hist.LoadHist()
 	tty.lineIdx = 0
 	tty.sugg = nil
+	tty.supSugg = false
 	tty.oldState, tty.err = term.GetState(int(os.Stdin.Fd()))
 	if tty.err != nil {
 		fmt.Println(tty.err)
@@ -313,8 +221,8 @@ func (tty *Tty) Draw() {
 	tty.Suggest()
 	fmt.Print(ansi.CursorShow)
 
-	tty.Cur.SetRowRelative(int(tty.Inp.index / uint(tty.sizeX)))
-	tty.Cur.SetColRelative(int(tty.Inp.index % uint(tty.sizeX)))
+	tty.Cur.SetRowRelative(int(tty.Inp.index / tty.sizeX))
+	tty.Cur.SetColRelative(int(tty.Inp.index % tty.sizeX))
 	tty.Cur.ReflectPos()
 	tty.Cur.Block()
 }
@@ -334,8 +242,8 @@ func (tty *Tty) DrawWinch() {
 	tty.Suggest()
 	fmt.Print(ansi.CursorShow)
 
-	tty.Cur.SetRowRelative(int(tty.Inp.index / uint(tty.sizeX)))
-	tty.Cur.SetColRelative(int(tty.Inp.index % uint(tty.sizeX)))
+	tty.Cur.SetRowRelative(int(tty.Inp.index / tty.sizeX))
+	tty.Cur.SetColRelative(int(tty.Inp.index % tty.sizeX))
 	tty.Cur.ReflectPos()
 	tty.Cur.Block()
 	tty.sigwinch.Store(false)
@@ -351,6 +259,10 @@ func (tty *Tty) Read() string {
 
 	for {
 		tty.Draw()
+
+		if exit {
+			break
+		}
 
 		n, err := os.Stdin.Read(input.b[:])
 		if err != nil {
@@ -368,6 +280,8 @@ func (tty *Tty) Read() string {
 			case key.Enter:
 				input.Str()
 				exit = true
+				tty.NilSuggestions()
+				tty.SuppressSuggestions()
 			case key.Backspace:
 				if input.Len() > 0 && input.index > 0 {
 					input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
@@ -382,18 +296,16 @@ func (tty *Tty) Read() string {
 				fmt.Println(err)
 				os.Exit(1)
 			}
-
-			if exit {
-				break
-			}
 		}
 
 		if tty.sigwinch.Load() {
 			tty.DrawWinch()
 		}
-		tty.sugg = tty.hist.trie.Search(string(input.bfr))
+
+		tty.CalcSuggestions()
 	}
 
+	tty.ClearSuggestions()
 	fmt.Print("\r\n")
 	tty.hist.Append(input.str)
 	tty.lineIdx++
@@ -408,12 +320,13 @@ func (tty *Tty) HandleEscapeSequence() {
 	}
 	switch input.b[2] {
 	case key.Delete:
-		if input.Len() > 0 && input.index < uint(input.Len()) {
-			if input.index != uint(input.Len())-1 {
+		if input.Len() > 0 && input.index < input.Len() {
+			if input.index != input.Len()-1 {
 				input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
 			} else {
 				input.bfr = input.bfr[:input.index]
-				input.index--
+				// Is this a good idea? I never liked Delete become backspace
+				// input.index = max(input.index-1, 0)
 			}
 		}
 	}
@@ -447,7 +360,7 @@ func (tty *Tty) HandleArrowKeys() {
 			pline, _ = hist.PrevLine()
 		}
 		input.bfr = []byte(pline)
-		input.index = uint(input.Len())
+		input.index = input.Len()
 
 	case key.Down:
 		hist := tty.hist
@@ -472,7 +385,7 @@ func (tty *Tty) HandleArrowKeys() {
 			nline, _ = hist.NextLine()
 		}
 		input.bfr = []byte(nline)
-		input.index = uint(input.Len())
+		input.index = input.Len()
 
 	case key.Left:
 		fmt.Print(ansi.Left)
@@ -482,12 +395,12 @@ func (tty *Tty) HandleArrowKeys() {
 
 	case key.Right:
 		fmt.Print(ansi.Right)
-		if input.index == uint(input.Len()) &&
+		if input.index == input.Len() &&
 			tty.sugg != nil && tty.sugg.Size() > 0 {
 			top, _ := tty.sugg.Top()
 			input.bfr = []byte(top.GetString())
-			input.index = uint(input.Len())
-		} else if input.index < uint(input.Len()) {
+			input.index = input.Len()
+		} else if input.index < input.Len() {
 			input.index++
 		}
 	}
@@ -524,4 +437,23 @@ func (tty *Tty) ReflectPrompt() {
 
 	ansi.SetFgRGB(186, 187, 241)
 	fmt.Print(ansi.BoldOn + " ~ " + ansi.Reset)
+}
+
+func (tty *Tty) CalcSuggestions() {
+	if !tty.supSugg {
+		tty.sugg = tty.hist.trie.Search(string(tty.Inp.bfr))
+	}
+}
+
+func (tty *Tty) NilSuggestions() {
+	tty.sugg = nil
+}
+
+func (tty *Tty) ClearSuggestions() {
+	tty.sugg = nil
+	tty.supSugg = false
+}
+
+func (tty *Tty) SuppressSuggestions() {
+	tty.supSugg = true
 }

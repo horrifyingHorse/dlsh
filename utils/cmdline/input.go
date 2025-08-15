@@ -16,7 +16,7 @@ type Cursor struct {
 type Input struct {
 	b     [256]byte
 	bfr   []byte
-	index uint
+	index int
 	str   string
 }
 
