@@ -1,9 +1,12 @@
 package cmdline
 
+// WARN: Needs urgent refactor
+
 import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -251,7 +254,7 @@ func (tty *Tty) DrawWinch() {
 }
 
 func (tty *Tty) Read() string {
-	// [FIX:] this is repetitive
+	// PERF: this is repetitive
 	go tty.winch()
 
 	tty.Reset()
@@ -285,6 +288,16 @@ func (tty *Tty) Read() string {
 		} else {
 			// fmt.Printf("\r\n%d\r\n", input.b[0])
 			switch input.finalByte {
+			case key.CtrlC:
+				exit = true
+				tty.NilSuggestions()
+				tty.HushNextSuggestion()
+			case key.CtrlD:
+				// TODO: This stores "exit" in cmdhist, improve approach
+				input.str = "exit"
+				exit = true
+				tty.NilSuggestions()
+				tty.HushNextSuggestion()
 			case key.Enter:
 				input.Str()
 				exit = true
@@ -337,13 +350,18 @@ func (tty *Tty) HandleEscapeSequence() {
 					// input.index = max(input.index-1, 0)
 				}
 			}
+		} else if input.keycode == int(key.Home) {
+			input.index = 0
+		} else if input.keycode == int(key.End) {
+			// TODO: End also completes a suggestion
+			input.index = input.Len()
 		}
 	}
 }
 
 func (tty *Tty) HandleArrowKeys() {
 	input := tty.Inp
-	switch input.b[2] {
+	switch input.finalByte {
 	case key.Up:
 		hist := tty.hist
 		if hist.size == 0 {
@@ -397,20 +415,46 @@ func (tty *Tty) HandleArrowKeys() {
 		input.index = input.Len()
 
 	case key.Left:
-		fmt.Print(ansi.Left)
-		if input.index > 0 {
-			input.index--
+		r, _ := regexp.Compile(`[ '"-]`)
+		if input.modifier == Ctrl {
+			// PERF: There has to be a better way
+			slices.Reverse(input.bfr)
+			new_idx := max(len(input.bfr)-input.index, 0)
+			loc := r.FindIndex(input.bfr[new_idx:])
+			slices.Reverse(input.bfr)
+			fmt.Print("\r\n", len(loc))
+			if loc != nil {
+				input.index = max(input.index-loc[1], 0)
+			} else {
+				input.index = 0
+			}
+		} else {
+			fmt.Print(ansi.Left) // PERF: No point at all
+			if input.index > 0 {
+				input.index--
+			}
 		}
 
 	case key.Right:
-		fmt.Print(ansi.Right)
-		if input.index == input.Len() &&
-			tty.sugg != nil && tty.sugg.Size() > 0 {
-			top, _ := tty.sugg.Top()
-			input.bfr = []byte(top.GetString())
-			input.index = input.Len()
-		} else if input.index < input.Len() {
-			input.index++
+		r, _ := regexp.Compile(`[ '"-]`)
+		if input.modifier == Ctrl {
+			// PERF: There has to be a better way
+			loc := r.FindIndex(input.bfr[input.index:])
+			if loc != nil {
+				input.index = max(input.index+loc[1], 0)
+			} else {
+				input.index = input.Len()
+			}
+		} else {
+			fmt.Print(ansi.Right)
+			if input.index == input.Len() &&
+				tty.sugg != nil && tty.sugg.Size() > 0 {
+				top, _ := tty.sugg.Top()
+				input.bfr = []byte(top.GetString())
+				input.index = input.Len()
+			} else if input.index < input.Len() {
+				input.index++
+			}
 		}
 	}
 }
