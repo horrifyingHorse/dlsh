@@ -6,17 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
 
 	"dlsh/utils/ansi"
 	ds "dlsh/utils/datastruct"
-	key "dlsh/utils/keys"
 
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -49,42 +45,6 @@ type Tty struct {
 
 	winchDone chan bool
 	sigwinch  atomic.Bool
-}
-
-// Ioctl Realization: https://github.com/snabb/tcxpgrp
-func TcGetpgrp(fd int) (pgrp int, err error) {
-	return unix.IoctlGetInt(fd, unix.TIOCGPGRP)
-}
-
-func TcSetpgrp(fd int, pgrp int) (err error) {
-	return unix.IoctlSetPointerInt(fd, unix.TIOCSPGRP, pgrp)
-}
-
-func IsForeground() bool {
-	fd, err := unix.Open("/dev/tty", 0666, unix.O_RDONLY)
-	if err != nil {
-		return false
-	}
-	defer unix.Close(fd)
-
-	pgrp1, err := TcGetpgrp(fd)
-	if err != nil {
-		return false
-	}
-	pgrp2 := unix.Getpgrp()
-	return pgrp1 == pgrp2
-}
-
-func SigIgn() {
-	signal.Ignore(syscall.SIGTTOU)
-	signal.Ignore(syscall.SIGTTIN)
-	signal.Ignore(syscall.SIGTSTP)
-}
-
-func SigDfl() {
-	signal.Reset(syscall.SIGTSTP)
-	signal.Reset(syscall.SIGTTIN)
-	signal.Reset(syscall.SIGTTOU)
 }
 
 func (tty *Tty) DumpHist() {
@@ -260,69 +220,28 @@ func (tty *Tty) Read() string {
 	tty.Reset()
 	input := tty.Inp
 	exit := false
+	var err error = nil
 
 	for {
 		tty.Draw()
-
 		if exit {
 			break
 		}
 
 		input.ClearReadBytes()
-		_, err := os.Stdin.Read(input.b[:])
-		if err != nil {
-			fmt.Println("DED\r\n")
-		}
-
+		err = input.ReadStdin()
 		input.DisplayReadBytes()
-
-		// https://en.wikipedia.org/wiki/ANSI_escape_code#Terminal_input_sequences
 		input.ParseReadBytes()
 
-		// is it Escape Sequecne?
-		if input.hasCSI {
-			// fmt.Printf("\r\nsize: %d | %d\r\n", len(input.b), input.b[6])
-			// returns toContinue
-			tty.HandleEscapeSequence()
-			tty.HushNextSuggestion()
-		} else {
-			// fmt.Printf("\r\n%d\r\n", input.b[0])
-			switch input.finalByte {
-			case key.CtrlC:
-				exit = true
-				tty.NilSuggestions()
-				tty.HushNextSuggestion()
-			case key.CtrlD:
-				// TODO: This stores "exit" in cmdhist, improve approach
-				input.str = "exit"
-				exit = true
-				tty.NilSuggestions()
-				tty.HushNextSuggestion()
-			case key.Enter:
-				input.Str()
-				exit = true
-				tty.NilSuggestions()
-				tty.HushNextSuggestion()
-			case key.Backspace:
-				if input.Len() > 0 && input.index > 0 {
-					input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
-					input.index--
-				}
-			default:
-				input.bfr = slices.Insert(input.bfr, int(input.index), input.b[0])
-				input.index++
-			}
+		exit, _ = tty.handleInput()
 
-			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
-			}
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
 		}
-
 		if tty.sigwinch.Load() {
 			tty.DrawWinch()
 		}
-
 		tty.CalcSuggestions()
 	}
 
@@ -332,131 +251,6 @@ func (tty *Tty) Read() string {
 	tty.lineIdx++
 	tty.winchDone <- true
 	return input.str
-}
-
-func (tty *Tty) HandleEscapeSequence() {
-	input := tty.Inp
-	if input.finalByte >= key.Up && input.finalByte <= key.Left {
-		tty.HandleArrowKeys()
-	}
-	if input.finalByte == key.Tilde {
-		if input.keycode == int(key.Delete) {
-			if input.Len() > 0 && input.index < input.Len() {
-				if input.index != input.Len()-1 {
-					input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
-				} else {
-					input.bfr = input.bfr[:input.index]
-					// Is this a good idea? I never liked Delete become backspace
-					// input.index = max(input.index-1, 0)
-				}
-			}
-		} else if input.keycode == int(key.Home) {
-			input.index = 0
-		} else if input.keycode == int(key.End) {
-			// TODO: End also completes a suggestion
-			input.index = input.Len()
-		}
-	}
-}
-
-func (tty *Tty) HandleArrowKeys() {
-	input := tty.Inp
-	switch input.finalByte {
-	case key.Up:
-		hist := tty.hist
-		if hist.size == 0 {
-			break
-		}
-		if hist.index-hist.base == tty.lineIdx {
-			hist.buf = input.Str()
-		}
-
-		var pline string
-		if tty.sugg != nil && tty.sugg.Size() > 0 {
-			if !tty.sugg.HasNext() {
-				break
-			}
-			tty.sugg.Next()
-			top, _ := tty.sugg.Top()
-			hist.index, _ = tty.sugg.TopPriority()
-			pline = top.GetString()
-		} else {
-			if hist.index == hist.size && input.Len() != 0 {
-				break
-			}
-			pline, _ = hist.PrevLine()
-		}
-		input.bfr = []byte(pline)
-		input.index = input.Len()
-
-	case key.Down:
-		hist := tty.hist
-		if hist.size == 0 || hist.index == hist.size {
-			break
-		}
-
-		var nline string
-		if tty.sugg != nil && tty.sugg.Size() > 0 {
-			if tty.sugg.HasPrev() {
-				tty.sugg.Prev()
-				top, _ := tty.sugg.Top()
-				hist.index, _ = tty.sugg.TopPriority()
-				nline = top.GetString()
-			} else {
-				nline = hist.buf
-				hist.index = hist.size
-			}
-		} else if hist.index-hist.base == tty.lineIdx-1 {
-			hist.index++
-		} else {
-			nline, _ = hist.NextLine()
-		}
-		input.bfr = []byte(nline)
-		input.index = input.Len()
-
-	case key.Left:
-		r, _ := regexp.Compile(`[ '"-]`)
-		if input.modifier == Ctrl {
-			// PERF: There has to be a better way
-			slices.Reverse(input.bfr)
-			new_idx := max(len(input.bfr)-input.index, 0)
-			loc := r.FindIndex(input.bfr[new_idx:])
-			slices.Reverse(input.bfr)
-			fmt.Print("\r\n", len(loc))
-			if loc != nil {
-				input.index = max(input.index-loc[1], 0)
-			} else {
-				input.index = 0
-			}
-		} else {
-			fmt.Print(ansi.Left) // PERF: No point at all
-			if input.index > 0 {
-				input.index--
-			}
-		}
-
-	case key.Right:
-		r, _ := regexp.Compile(`[ '"-]`)
-		if input.modifier == Ctrl {
-			// PERF: There has to be a better way
-			loc := r.FindIndex(input.bfr[input.index:])
-			if loc != nil {
-				input.index = max(input.index+loc[1], 0)
-			} else {
-				input.index = input.Len()
-			}
-		} else {
-			fmt.Print(ansi.Right)
-			if input.index == input.Len() &&
-				tty.sugg != nil && tty.sugg.Size() > 0 {
-				top, _ := tty.sugg.Top()
-				input.bfr = []byte(top.GetString())
-				input.index = input.Len()
-			} else if input.index < input.Len() {
-				input.index++
-			}
-		}
-	}
 }
 
 func (tty *Tty) ClearLine(cl ClearLineMethod) {
@@ -469,15 +263,9 @@ func (tty *Tty) GetPrompt() {
 		fmt.Println("Failed to get current dir")
 		os.Exit(1)
 	}
-
-	// home := os.Getenv("HOME")
-	// if strings.Index(cwd, home) == 0 {
-	// 	cwd = strings.Replace(cwd, home, "~", 1)
-	// }
-	if strings.Index(cwd, "/") != -1 {
+	if strings.Contains(cwd, "/") {
 		cwd = cwd[strings.LastIndex(cwd, "/")+1:]
 	}
-
 	tty.Prompt = cwd
 }
 

@@ -19,11 +19,11 @@ func main() {
 		tty.Restore()
 
 		line = strings.Trim(line, " \t")
-		tokens := cl.Tokenize(&line)
+		tokens := eu.Tokenize(&line)
 		// fmt.Println(tokens, len(tokens))
 
 		dlsh := eu.NewExecUnit()
-		dlsh.Instructions = cl.Parse(tokens)
+		dlsh.Instructions = eu.Parse(tokens)
 		for _, ins := range dlsh.Instructions {
 			dlsh.Ins = ins
 			cmd := ins.Cmd
@@ -32,7 +32,7 @@ func main() {
 					break
 				}
 				tty.GetPrompt()
-				if ins.InsType != cl.PIPE {
+				if ins.InsType != eu.PIPE {
 					continue
 				}
 			} else if cmd.Path == "exit" {
@@ -41,15 +41,15 @@ func main() {
 			}
 
 			switch ins.InsType {
-			case cl.EXEC:
+			case eu.EXEC:
 				if dlsh.Piped {
 					dlsh.DrainExec()
 				} else {
 					dlsh.Run()
 				}
-			case cl.PIPE:
+			case eu.PIPE:
 				dlsh.ExecPipe()
-			case cl.WAIT:
+			case eu.WAIT:
 				dlsh.DrainPipeline()
 			}
 

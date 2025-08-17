@@ -1,20 +1,58 @@
 package execunit
 
 import (
-	cl "dlsh/utils/cmdline"
-	ds "dlsh/utils/datastruct"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	ds "dlsh/utils/datastruct"
 )
+
+// Ioctl Realization: https://github.com/snabb/tcxpgrp
+func TcGetpgrp(fd int) (pgrp int, err error) {
+	return unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+}
+
+func TcSetpgrp(fd int, pgrp int) (err error) {
+	return unix.IoctlSetPointerInt(fd, unix.TIOCSPGRP, pgrp)
+}
+
+func IsForeground() bool {
+	fd, err := unix.Open("/dev/tty", 0666, unix.O_RDONLY)
+	if err != nil {
+		return false
+	}
+	defer unix.Close(fd)
+
+	pgrp1, err := TcGetpgrp(fd)
+	if err != nil {
+		return false
+	}
+	pgrp2 := unix.Getpgrp()
+	return pgrp1 == pgrp2
+}
+
+func SigIgn() {
+	signal.Ignore(syscall.SIGTTOU)
+	signal.Ignore(syscall.SIGTTIN)
+	signal.Ignore(syscall.SIGTSTP)
+}
+
+func SigDfl() {
+	signal.Reset(syscall.SIGTSTP)
+	signal.Reset(syscall.SIGTTIN)
+	signal.Reset(syscall.SIGTTOU)
+}
 
 type ExecUnit struct {
 	Piped        bool
 	R, W         *os.File
-	Instructions cl.Instructions
+	Instructions Instructions
 	Err          error
-	Ins          *cl.Instruction
+	Ins          *Instruction
 	QPid         *ds.Queue[int]
 	PGrp         int
 }
@@ -49,13 +87,13 @@ func (dlsh *ExecUnit) ExecPipe() {
 	ins.State = true
 
 	pid := ins.Cmd.Process.Pid
-	if !cl.IsForeground() {
+	if !IsForeground() {
 		dlsh.QPid.Enqueue(pid)
 		return
 	}
 
-	cl.SigIgn()
-	cl.TcSetpgrp(int(os.Stdin.Fd()), pid)
+	SigIgn()
+	TcSetpgrp(int(os.Stdin.Fd()), pid)
 }
 
 func (dlsh *ExecUnit) DrainPipeline() {
@@ -66,18 +104,18 @@ func (dlsh *ExecUnit) DrainPipeline() {
 			}
 			ins.State = false
 			if !dlsh.QPid.Empty() {
-				cl.TcSetpgrp(int(os.Stdin.Fd()), dlsh.QPid.Dequeue())
+				TcSetpgrp(int(os.Stdin.Fd()), dlsh.QPid.Dequeue())
 			} else {
-				cl.TcSetpgrp(int(os.Stdin.Fd()), dlsh.PGrp)
-				cl.SigDfl()
+				TcSetpgrp(int(os.Stdin.Fd()), dlsh.PGrp)
+				SigDfl()
 			}
 		} else if !ins.IsChdir() {
 			continue
 		}
-		if i > 0 && dlsh.Instructions[i-1].InsType == cl.PIPE {
+		if i > 0 && dlsh.Instructions[i-1].InsType == PIPE {
 			ins.R.Close()
 		}
-		if ins.InsType == cl.PIPE {
+		if ins.InsType == PIPE {
 			ins.W.Close()
 		}
 	}
@@ -92,11 +130,11 @@ func (dlsh *ExecUnit) DrainExec() {
 	if dlsh.Err = ins.Cmd.Start(); dlsh.Err == nil {
 		ins.State = true
 		pid := ins.Cmd.Process.Pid
-		if !cl.IsForeground() {
+		if !IsForeground() {
 			dlsh.QPid.Enqueue(pid)
 		} else {
-			cl.SigIgn()
-			cl.TcSetpgrp(int(os.Stdin.Fd()), pid)
+			SigIgn()
+			TcSetpgrp(int(os.Stdin.Fd()), pid)
 		}
 		dlsh.DrainPipeline()
 	} else {
@@ -113,9 +151,9 @@ func (dlsh *ExecUnit) Run() {
 
 	pid := ins.Cmd.Process.Pid
 
-	cl.SigIgn()
-	cl.TcSetpgrp(int(os.Stdin.Fd()), pid)
+	SigIgn()
+	TcSetpgrp(int(os.Stdin.Fd()), pid)
 	ins.Cmd.Wait()
-	cl.TcSetpgrp(int(os.Stdin.Fd()), dlsh.PGrp)
-	cl.SigDfl()
+	TcSetpgrp(int(os.Stdin.Fd()), dlsh.PGrp)
+	SigDfl()
 }
