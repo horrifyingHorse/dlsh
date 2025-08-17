@@ -28,6 +28,7 @@ type Input struct {
 	index     int
 	str       string
 
+	Esc      bool
 	hasCSI   bool
 	keycode  int
 	modifier Modifier
@@ -67,6 +68,7 @@ func (inp *Input) ClearReadBytes() {
 		}
 		inp.b[i] = 0
 	}
+	inp.Esc = false
 	inp.hasCSI = false
 	inp.keycode = 0
 	inp.modifier = NoModifier
@@ -89,7 +91,9 @@ func (inp *Input) ParseReadBytes() {
 		if inp.b[i] == 0 {
 			break
 		}
-		if inp.finalByte == key.Escape && inp.b[i] == key.OpenSqBracket {
+		if inp.b[i] == key.Escape {
+			inp.Esc = true
+		} else if inp.finalByte == key.Escape && inp.b[i] == key.OpenSqBracket {
 			inp.hasCSI = true
 		} else if inp.hasCSI && inp.finalByte == key.OpenSqBracket {
 			inp.keycode = int(inp.b[i])

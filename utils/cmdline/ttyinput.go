@@ -1,8 +1,6 @@
 package cmdline
 
 import (
-	"fmt"
-	"regexp"
 	"slices"
 
 	key "dlsh/utils/keys"
@@ -34,13 +32,17 @@ func (tty *Tty) handleInput() (bool, error) {
 		tty.HushNextSuggestion()
 	case key.Backspace:
 		exit = false
-		if input.Len() > 0 && input.index > 0 {
-			input.bfr = slices.Delete(input.bfr, int(input.index)-1, int(input.index))
+		if input.Esc {
+			new_idx := tty.match.FirstLeftOf(input.index, &input.bfr)
+			input.bfr = slices.Delete(input.bfr, new_idx, input.index)
+			input.index = new_idx
+		} else if input.Len() > 0 && input.index > 0 {
+			input.bfr = slices.Delete(input.bfr, input.index-1, input.index)
 			input.index--
 		}
 	default:
 		exit = false
-		input.bfr = slices.Insert(input.bfr, int(input.index), input.b[0])
+		input.bfr = slices.Insert(input.bfr, input.index, input.b[0])
 		input.index++
 	}
 	return exit, nil
@@ -134,19 +136,8 @@ func (tty *Tty) ArrowKeyDown() {
 
 func (tty *Tty) ArrowKeyLeft() {
 	input := tty.Inp
-	r, _ := regexp.Compile(`[ '"-]`)
 	if input.modifier == Ctrl {
-		// PERF: There has to be a better way
-		slices.Reverse(input.bfr)
-		new_idx := max(len(input.bfr)-input.index, 0)
-		loc := r.FindIndex(input.bfr[new_idx:])
-		slices.Reverse(input.bfr)
-		fmt.Print("\r\n", len(loc))
-		if loc != nil {
-			input.index = max(input.index-loc[1], 0)
-		} else {
-			input.index = 0
-		}
+		input.index = tty.match.FirstLeftOf(input.index, &input.bfr)
 	} else {
 		if input.index > 0 {
 			input.index--
@@ -156,15 +147,8 @@ func (tty *Tty) ArrowKeyLeft() {
 
 func (tty *Tty) ArrowKeyRight() {
 	input := tty.Inp
-	r, _ := regexp.Compile(`[ '"-]`)
 	if input.modifier == Ctrl {
-		// PERF: There has to be a better way
-		loc := r.FindIndex(input.bfr[input.index:])
-		if loc != nil {
-			input.index = max(input.index+loc[1], 0)
-		} else {
-			input.index = input.Len()
-		}
+		input.index = tty.match.FirstRightOf(input.index, &input.bfr)
 	} else {
 		if input.index == input.Len() &&
 			tty.sugg != nil && tty.sugg.Size() > 0 {

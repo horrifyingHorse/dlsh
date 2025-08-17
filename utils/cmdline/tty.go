@@ -33,6 +33,7 @@ type Tty struct {
 	Inp      *Input
 	Cur      *Cursor
 	hist     *CliHistory
+	match    *Pattern
 	lineIdx  uint
 	sugg     *ds.Heap[*ds.TrieNode]
 	supSugg  bool
@@ -69,6 +70,7 @@ func NewTty() *Tty {
 	tty.sizeX = tty.dimX - tty.Cur.initCol
 	tty.sizeY = 1
 	tty.winchDone = make(chan bool)
+	tty.match = NewPattern(`[ '/\()"-,.|?!@#&^]`)
 
 	return tty
 }
