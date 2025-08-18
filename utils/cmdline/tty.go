@@ -1,6 +1,6 @@
 package cmdline
 
-// WARN: Needs urgent refactor
+// WARN: Needs refactor
 
 import (
 	"fmt"
@@ -28,6 +28,7 @@ func GetTermSize() (int, int, error) {
 	return term.GetSize(int(os.Stdin.Fd()))
 }
 
+// TODO: Separate Layout from tty: dimX, dimY, sizeX, sizeY, winch
 type Tty struct {
 	Prompt   string
 	Inp      *Input
@@ -187,8 +188,8 @@ func (tty *Tty) Draw() {
 	tty.Suggest()
 	fmt.Print(ansi.CursorShow)
 
-	tty.Cur.SetRowRelative(int(tty.Inp.index / tty.sizeX))
-	tty.Cur.SetColRelative(int(tty.Inp.index % tty.sizeX))
+	tty.Cur.SetRowRelative(tty.Inp.Index() / tty.sizeX)
+	tty.Cur.SetColRelative(tty.Inp.Index() % tty.sizeX)
 	tty.Cur.ReflectPos()
 	tty.Cur.Block()
 }
@@ -208,8 +209,8 @@ func (tty *Tty) DrawWinch() {
 	tty.Suggest()
 	fmt.Print(ansi.CursorShow)
 
-	tty.Cur.SetRowRelative(int(tty.Inp.index / tty.sizeX))
-	tty.Cur.SetColRelative(int(tty.Inp.index % tty.sizeX))
+	tty.Cur.SetRowRelative(tty.Inp.Index() / tty.sizeX)
+	tty.Cur.SetColRelative(tty.Inp.Index() % tty.sizeX)
 	tty.Cur.ReflectPos()
 	tty.Cur.Block()
 	tty.sigwinch.Store(false)

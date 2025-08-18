@@ -17,6 +17,7 @@ func (tty *Tty) handleInput() (bool, error) {
 	}
 
 	exit := true
+	idx := input.Index()
 	switch input.finalByte {
 	case key.CtrlC:
 		tty.NilSuggestions()
@@ -33,17 +34,17 @@ func (tty *Tty) handleInput() (bool, error) {
 	case key.Backspace:
 		exit = false
 		if input.Esc {
-			new_idx := tty.match.FirstLeftOf(input.index, &input.bfr)
-			input.bfr = slices.Delete(input.bfr, new_idx, input.index)
-			input.index = new_idx
-		} else if input.Len() > 0 && input.index > 0 {
-			input.bfr = slices.Delete(input.bfr, input.index-1, input.index)
-			input.index--
+			new_idx := tty.match.FirstLeftOf(idx, &input.bfr)
+			input.bfr = slices.Delete(input.bfr, new_idx, idx)
+			input.SetIndex(new_idx)
+		} else if input.Len() > 0 && idx > 0 {
+			input.bfr = slices.Delete(input.bfr, idx-1, idx)
+			input.SetIndexOffset(-1)
 		}
 	default:
 		exit = false
-		input.bfr = slices.Insert(input.bfr, input.index, input.b[0])
-		input.index++
+		input.bfr = slices.Insert(input.bfr, idx, input.b[0])
+		input.SetIndexOffset(+1)
 	}
 	return exit, nil
 }
@@ -60,21 +61,22 @@ func (tty *Tty) HandleEscapeSequence() {
 
 func (tty *Tty) HandleEscapeSequenceTerminatingTilde() {
 	input := tty.Inp
+	idx := input.Index()
 	if input.keycode == int(key.Delete) {
-		if input.Len() > 0 && input.index < input.Len() {
-			if input.index != input.Len()-1 {
-				input.bfr = slices.Delete(input.bfr, int(input.index), int(input.index)+1)
+		if input.Len() > 0 && idx < input.Len() {
+			if idx != input.Len()-1 {
+				input.bfr = slices.Delete(input.bfr, idx, idx+1)
 			} else {
-				input.bfr = input.bfr[:input.index]
+				input.bfr = input.bfr[:idx]
 				// Is this a good idea? I never liked Delete become backspace
-				// input.index = max(input.index-1, 0)
+				// input.SetIndexOffset(-1)
 			}
 		}
 	} else if input.keycode == int(key.Home) {
-		input.index = 0
+		input.SetIndexMin()
 	} else if input.keycode == int(key.End) {
 		// TODO: End also completes a suggestion
-		input.index = input.Len()
+		input.SetIndexMax()
 	}
 }
 
@@ -104,7 +106,7 @@ func (tty *Tty) ArrowKeyUp() {
 		pline, _ = hist.PrevLine()
 	}
 	input.bfr = []byte(pline)
-	input.index = input.Len()
+	input.SetIndexMax()
 }
 
 func (tty *Tty) ArrowKeyDown() {
@@ -131,32 +133,32 @@ func (tty *Tty) ArrowKeyDown() {
 		nline, _ = hist.NextLine()
 	}
 	input.bfr = []byte(nline)
-	input.index = input.Len()
+	input.SetIndexMax()
 }
 
 func (tty *Tty) ArrowKeyLeft() {
 	input := tty.Inp
+	idx := input.Index()
 	if input.modifier == Ctrl {
-		input.index = tty.match.FirstLeftOf(input.index, &input.bfr)
+		input.SetIndex(tty.match.FirstLeftOf(idx, &input.bfr))
 	} else {
-		if input.index > 0 {
-			input.index--
-		}
+		input.SetIndexOffset(-1)
 	}
 }
 
 func (tty *Tty) ArrowKeyRight() {
 	input := tty.Inp
+	idx := input.Index()
 	if input.modifier == Ctrl {
-		input.index = tty.match.FirstRightOf(input.index, &input.bfr)
+		input.SetIndex(tty.match.FirstRightOf(idx, &input.bfr))
 	} else {
-		if input.index == input.Len() &&
+		if idx == input.Len() &&
 			tty.sugg != nil && tty.sugg.Size() > 0 {
 			top, _ := tty.sugg.Top()
 			input.bfr = []byte(top.GetString())
-			input.index = input.Len()
-		} else if input.index < input.Len() {
-			input.index++
+			input.SetIndexMax()
+		} else if idx < input.Len() {
+			input.SetIndexOffset(+1)
 		}
 	}
 }

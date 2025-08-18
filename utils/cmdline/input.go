@@ -103,3 +103,23 @@ func (inp *Input) ParseReadBytes() {
 		inp.finalByte = inp.b[i]
 	}
 }
+
+func (inp *Input) Index() int {
+	return inp.index
+}
+
+func (inp *Input) SetIndex(index int) {
+	inp.index = min(max(index, 0), inp.Len())
+}
+
+func (inp *Input) SetIndexOffset(index int) {
+	inp.index = min(max(inp.index+index, 0), inp.Len())
+}
+
+func (inp *Input) SetIndexMin() {
+	inp.index = 0
+}
+
+func (inp *Input) SetIndexMax() {
+	inp.index = inp.Len()
+}
