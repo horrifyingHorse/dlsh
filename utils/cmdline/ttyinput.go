@@ -1,8 +1,6 @@
 package cmdline
 
 import (
-	"slices"
-
 	key "dlsh/utils/keys"
 )
 
@@ -23,8 +21,9 @@ func (tty *Tty) handleInput() (bool, error) {
 		tty.NilSuggestions()
 		tty.HushNextSuggestion()
 	case key.CtrlD:
-		// TODO: This stores "exit" in cmdhist, improve approach
-		input.str = "exit"
+		// https://unix.stackexchange.com/questions/110240/why-does-ctrl-d-eof-exit-the-shell
+		// Also check the EOF behavoir to flush the stdin, top ans to :
+		//			   https://stackoverflow.com/questions/1516122/how-to-capture-controld-signal
 		tty.NilSuggestions()
 		tty.HushNextSuggestion()
 	case key.Enter:
@@ -34,16 +33,16 @@ func (tty *Tty) handleInput() (bool, error) {
 	case key.Backspace:
 		exit = false
 		if input.Esc {
-			new_idx := tty.match.FirstLeftOf(idx, &input.bfr)
-			input.bfr = slices.Delete(input.bfr, new_idx, idx)
-			input.SetIndex(new_idx)
-		} else if input.Len() > 0 && idx > 0 {
-			input.bfr = slices.Delete(input.bfr, idx-1, idx)
+			offset := tty.match.FirstLeftOf(idx, input.Bfr())
+			input.BfrDelCurIdxOffset(offset)
+			input.SetIndexOffset(offset)
+		} else {
+			input.BfrDelCurIdxOffset(-1)
 			input.SetIndexOffset(-1)
 		}
 	default:
 		exit = false
-		input.bfr = slices.Insert(input.bfr, idx, input.b[0])
+		input.BfrInsAtCurIdx(input.finalByte)
 		input.SetIndexOffset(+1)
 	}
 	return exit, nil
@@ -64,13 +63,9 @@ func (tty *Tty) HandleEscapeSequenceTerminatingTilde() {
 	idx := input.Index()
 	if input.keycode == int(key.Delete) {
 		if input.Len() > 0 && idx < input.Len() {
-			if idx != input.Len()-1 {
-				input.bfr = slices.Delete(input.bfr, idx, idx+1)
-			} else {
-				input.bfr = input.bfr[:idx]
-				// Is this a good idea? I never liked Delete become backspace
-				// input.SetIndexOffset(-1)
-			}
+			input.BfrDelCurIdxOffset(1)
+			// Is this a good idea? I never liked Delete become backspace
+			// input.SetIndexOffset(-1)
 		}
 	} else if input.keycode == int(key.Home) {
 		input.SetIndexMin()
@@ -105,8 +100,7 @@ func (tty *Tty) ArrowKeyUp() {
 		}
 		pline, _ = hist.PrevLine()
 	}
-	input.bfr = []byte(pline)
-	input.SetIndexMax()
+	input.SetBfrToStr(pline)
 }
 
 func (tty *Tty) ArrowKeyDown() {
@@ -132,15 +126,14 @@ func (tty *Tty) ArrowKeyDown() {
 	} else {
 		nline, _ = hist.NextLine()
 	}
-	input.bfr = []byte(nline)
-	input.SetIndexMax()
+	input.SetBfrToStr(nline)
 }
 
 func (tty *Tty) ArrowKeyLeft() {
 	input := tty.Inp
 	idx := input.Index()
 	if input.modifier == Ctrl {
-		input.SetIndex(tty.match.FirstLeftOf(idx, &input.bfr))
+		input.SetIndexOffset(tty.match.FirstLeftOf(idx, input.Bfr()))
 	} else {
 		input.SetIndexOffset(-1)
 	}
@@ -150,13 +143,12 @@ func (tty *Tty) ArrowKeyRight() {
 	input := tty.Inp
 	idx := input.Index()
 	if input.modifier == Ctrl {
-		input.SetIndex(tty.match.FirstRightOf(idx, &input.bfr))
+		input.SetIndexOffset(tty.match.FirstRightOf(idx, input.Bfr()))
 	} else {
 		if idx == input.Len() &&
 			tty.sugg != nil && tty.sugg.Size() > 0 {
 			top, _ := tty.sugg.Top()
-			input.bfr = []byte(top.GetString())
-			input.SetIndexMax()
+			input.SetBfrToStr(top.GetString())
 		} else if idx < input.Len() {
 			input.SetIndexOffset(+1)
 		}

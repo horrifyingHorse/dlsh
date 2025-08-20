@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	ds "dlsh/utils/datastruct"
 )
@@ -23,6 +24,9 @@ func NewCliHistory() *CliHistory {
 }
 
 func (hist *CliHistory) Append(line string) {
+	if len(strings.Trim(line, " \t")) == 0 {
+		return
+	}
 	hist.trie.Insert(line)
 	hist.size = uint(hist.trie.Size())
 	hist.index = hist.size

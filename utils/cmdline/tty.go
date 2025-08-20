@@ -28,6 +28,7 @@ func GetTermSize() (int, int, error) {
 	return term.GetSize(int(os.Stdin.Fd()))
 }
 
+// FIX: Somehow Layout broke(how?)
 // TODO: Separate Layout from tty: dimX, dimY, sizeX, sizeY, winch
 type Tty struct {
 	Prompt   string
@@ -216,7 +217,7 @@ func (tty *Tty) DrawWinch() {
 	tty.sigwinch.Store(false)
 }
 
-func (tty *Tty) Read() string {
+func (tty *Tty) ReadLine() (string, bool) {
 	// PERF: this is repetitive
 	go tty.winch()
 
@@ -253,7 +254,7 @@ func (tty *Tty) Read() string {
 	tty.hist.Append(input.str)
 	tty.lineIdx++
 	tty.winchDone <- true
-	return input.str
+	return input.str, input.ReadEOF()
 }
 
 func (tty *Tty) ClearLine(cl ClearLineMethod) {

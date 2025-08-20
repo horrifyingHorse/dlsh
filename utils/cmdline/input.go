@@ -3,6 +3,7 @@ package cmdline
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	ansi "dlsh/utils/ansi"
 	key "dlsh/utils/keys"
@@ -21,6 +22,7 @@ const (
 	CtrlAltShift Modifier = 55
 )
 
+// Line Editor
 type Input struct {
 	b         [256]byte
 	finalByte byte
@@ -122,4 +124,59 @@ func (inp *Input) SetIndexMin() {
 
 func (inp *Input) SetIndexMax() {
 	inp.index = inp.Len()
+}
+
+func (inp *Input) ReadEOF() bool {
+	return inp.finalByte == key.CtrlD
+}
+
+// I like this but its unconventional, gotta see the diff in PERF
+// NOTE: copy(dest, src) copies min(len(dest), len(src)) bytes
+// keep len(dest) > 0
+
+// func (inp *Input) Bfr(dest *[]byte) *[]byte {
+// 	copy(*dest, inp.bfr)
+// 	return dest
+// }
+
+// PERF: Returning a copy on heap is surely a bad idea right?
+func (inp *Input) Bfr() []byte {
+	buffer := make([]byte, inp.Len())
+	copy(buffer, inp.bfr)
+	return buffer
+}
+
+func (inp *Input) BfrDelFromTo(fromIdx, toIdx int) {
+	if fromIdx < 0 {
+		fromIdx = 0
+	} else if fromIdx >= inp.Len() {
+		fromIdx = inp.Len() - 1
+	}
+	if toIdx < 0 || toIdx >= inp.Len() {
+		toIdx = inp.Len() - 1
+	}
+
+	if fromIdx < toIdx {
+		return
+	}
+	inp.bfr = slices.Delete(inp.bfr, fromIdx, inp.index)
+}
+
+func (inp *Input) BfrDelCurIdxOffset(offset int) {
+	newIdx := min(max(inp.index+offset, 0), inp.Len())
+	if newIdx < inp.index {
+		inp.bfr = slices.Delete(inp.bfr, newIdx, inp.index)
+	} else {
+		inp.bfr = slices.Delete(inp.bfr, inp.index, newIdx)
+	}
+}
+
+func (inp *Input) BfrInsAtCurIdx(v ...byte) {
+	inp.bfr = slices.Insert(inp.bfr, inp.index, v...)
+}
+
+// Sets the input bfr to string s and sets the index to len(s)
+func (inp *Input) SetBfrToStr(s string) {
+	inp.bfr = []byte(s)
+	inp.SetIndexMax()
 }

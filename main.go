@@ -15,7 +15,11 @@ func main() {
 		tty.ReflectPrompt()
 
 		tty.Raw()
-		line := tty.Read()
+		line, eof := tty.ReadLine()
+		if eof {
+			tty.DumpHist()
+			return
+		}
 		tty.Restore()
 
 		line = strings.Trim(line, " \t")
